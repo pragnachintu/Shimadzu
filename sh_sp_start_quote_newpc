@@ -56,7 +56,7 @@ case when new_option=1 then dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,q
 case when new_option=1 then dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)else new_optionpriceperunit end as new_optionpriceperunit , qd.New_writeindesc,qd.new_Adhoc
 from pt_mirror_quotedetail qd with (nolock) inner join
 pt_prod_config_product_dim_header pd with (nolock) on qd.productid=pd.product_id
-inner join pt_mirror_product mp on pd.product_id=mp.productid and mp.statecode=0
+inner join pt_mirror_product mp on pd.product_id=mp.productid
  LEFT join pt_guide_responses r with (nolock) on 
 pd.product_dim_id=r.product_dim_id and qd.pt_category_id=r.question_id
 inner join pt_guide_versions v on v.id=qd.pt_kit_id
@@ -101,7 +101,6 @@ from pt_mirror_quotedetail qd with (nolock) inner join
 pt_prod_config_product_dim_header pd with (nolock) on qd.productid=pd.product_id LEFT join pt_guide_responses r with (nolock) on 
 pd.product_dim_id=r.product_dim_id and qd.pt_category_id=r.question_id
 inner join pt_guide_versions v on v.id=qd.pt_kit_id
-inner join pt_mirror_product mp on mp.productid=qd.productid and mp.statecode=0
  where quoteid=@session_id and pt_includedproduct=0  AND ( r.id is not NULL OR qd.new_adhoc =1)
 
 
@@ -128,7 +127,7 @@ WHERE r.product_dim_id is not null and mp.productid is null )  -- query for surv
 
 
 
------------------------------included products------------------------
+-----------------------------
 
  delete from pt_guide_execution_included_products where guide_instance_id in (select id from pt_guide_execution_instance where context_id=@session_id)
 
@@ -144,7 +143,7 @@ and  r.question_id=(select top 1 pt_category_id from pt_mirror_quotedetail where
 pt_prod_config_product_dim_header ph on qd.productid=ph.product_id  
 inner join pt_guide_rules gr ON gr.guide_id=qd.pt_kit_id and  gr.type='included' 
  inner join pt_guide_rule_connections rc on rc.rule_id=gr.id and rc.object_id=ph.product_dim_id and rc.rule_id=qd.pt_includedproductid
- inner join pt_mirror_product mp on mp.productid=qd.productid and mp.statecode=0
+
 where quoteid=@session_id and pt_includedproduct=1
 
 ------------adding included products into extn table--------------------------------------
@@ -289,5 +288,7 @@ select @@ROWCOUNT as row_count
 
 
 end
+
+
 
 
