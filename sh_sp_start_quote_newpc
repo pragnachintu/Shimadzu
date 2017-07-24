@@ -1,0 +1,293 @@
+
+
+ALTER procedure [dbo].[sh_sp_start_quote_newpc]
+(
+@session_id uniqueidentifier,
+@login_name nvarchar(50)
+)
+
+as
+
+begin
+
+
+
+
+
+set @login_name='reconfig';
+
+--insertion for old quotes
+
+
+delete from sh_pt_pc_cartcontents_extn where session_id=@session_id
+
+
+
+insert into sh_pt_pc_cartcontents_extn(id,session_id,guide_instance_id,product_dim_id,quantity,price,price_list_id,origin_by,origin_date,changed_by,change_date,isproductoverridden,
+isoption,option_qty,kit_config_number,includedproductid,new_lineitem_number,writeinproductname,pt_includedproduct,kit_id,kit_id_text,question_id,response_id,new_percentdiscount,
+new_manualdiscount,manualdiscount,option_amount,option_manualdiscount_percent,option_manualdiscount,option_discount_subtotal,option_extended_amount,option_priceperunit, write_in_desc,adhoc)
+
+select 
+quotedetailid,
+quoteid,
+pt_configuration_id,
+pd.product_dim_id,
+case when new_option=1 then new_optionquantity else quantity end as quantity ,
+case when new_pricegroup=14 then priceperunit
+else
+dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid) end as price ,
+case when new_pricegroup=14 then new_pricelistid
+else
+dbo.sh_fn_getaccurate_price_listid(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)end as  price_list_id,
+@login_name,getdate(),@login_name,getdate(),
+isproductoverridden,
+new_option,
+new_optionquantity,
+case when (new_kit_config_number is null) then dense_rank() over(order by pt_configuration_id )else new_kit_config_number end as new_kit_config_number ,
+null,new_quote_lineitemnumber,new_writeindesc,pt_includedproduct,
+pt_kit_id,new_kit_id_text,pt_category_id
+,ISNULL(r.id, qd.QuoteDetailId)
+,new_manualdiscountpercent,new_manualdiscount,
+case when new_option=1 then manualdiscountamount else ( (( dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)*New_ManualDiscountPercent )/100)+ isnull(new_manualdiscount,0))end as manualdiscountamount ,
+case when new_option=1 then (New_OptionQuantity*dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)) else new_optionamount end as new_optionamount,
+new_optionmanualdiscountpercent,new_optionmanualdiscount,
+case when new_option=1 then( (( dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)*new_optionmanualdiscountpercent )/100)+ new_optionmanualdiscount)else new_optiondiscountsubtotal end as new_optiondiscountsubtotal,
+case when new_option=1 then dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid) else new_optionprice  end as new_optionprice ,
+case when new_option=1 then dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)else new_optionpriceperunit end as new_optionpriceperunit , qd.New_writeindesc,qd.new_Adhoc
+from pt_mirror_quotedetail qd with (nolock) inner join
+pt_prod_config_product_dim_header pd with (nolock) on qd.productid=pd.product_id
+inner join pt_mirror_product mp on pd.product_id=mp.productid and mp.statecode=0
+ LEFT join pt_guide_responses r with (nolock) on 
+pd.product_dim_id=r.product_dim_id and qd.pt_category_id=r.question_id
+inner join pt_guide_versions v on v.id=qd.pt_kit_id
+ where quoteid=@session_id and pt_includedproduct=0 AND ( r.id is not NULL OR qd.new_adhoc =1)
+
+
+ --need to update app_profile_id,prepared_by
+
+ delete from pt_pc_cart_header where session_id=@session_id
+
+ insert into  pt_pc_cart_header 
+ (session_id,app_profile_id,name,description,revision_number,price_list_id,prepared_by_id,partner_id,quote_id,original_quote_id,opportunity_id,account_id,contact_id,origin_by,origin_date,changed_by,change_date)
+select quoteid,'EB85185B-5B1B-4196-86A4-688F15F3BE2C',substring(name,1,100),description,revisionnumber,pricelevelid,null,null,quoteid,null,opportunityid,accountid,contactid,@login_name,GETDATE(),@login_name,GETDATE() 
+from pt_mirror_quote with (nolock)  where quoteid=@session_id
+
+
+create table #ids(instance_id uniqueidentifier,kit_id uniqueidentifier)
+
+insert into #ids (instance_id,kit_id)
+select distinct pt_configuration_id,pt_kit_id from pt_mirror_quotedetail where quoteid=@session_id and (pt_kit_id is not null and pt_configuration_id is not null)
+
+
+
+delete from pt_guide_execution_instance where context_id=@session_id or id in (select instance_id from #ids )
+
+insert into  pt_guide_execution_instance 
+(id,guide_version_id,context_id,name,comments,execution_mode,owner_id,show_locked_sections,show_included_prod_notifications,display_mode,origin_by,origin_date,changed_by,change_date)
+select instance_id,kit_id,@session_id,null,null,'configurator',null,1,1,'wizard',@login_name,getdate(),@login_name,getdate() from #ids
+ 
+
+
+
+delete from pt_guide_execution_responses where guide_instance_id in (select id from pt_guide_execution_instance where context_id=@session_id)
+
+insert into pt_guide_execution_responses 
+(id, guide_instance_id, base_question_id, question_id, response_id, response_value, response_string_value, response_int_value, response_float_value, response_date_value, 
+response_comments, response_price, origin_by, origin_date, changed_by, change_date)
+select quotedetailid,pt_configuration_id,null,pt_category_id
+,ISNULL(r.id, qd.QuoteDetailId)
+,case when new_option=0 then Substring( (cast (quantity as nvarchar) ),0,CharIndex('.',(cast (quantity as nvarchar))))  else Substring( (cast (new_optionquantity as nvarchar) ),0,CharIndex('.',(cast (new_optionquantity as nvarchar)))) end as quantity,null,null,null,null,null,dbo.sh_fn_newpc_GetAccuratePrice(pd.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)as priceperunit,@login_name,getdate(),@login_name,getdate()
+from pt_mirror_quotedetail qd with (nolock) inner join
+pt_prod_config_product_dim_header pd with (nolock) on qd.productid=pd.product_id LEFT join pt_guide_responses r with (nolock) on 
+pd.product_dim_id=r.product_dim_id and qd.pt_category_id=r.question_id
+inner join pt_guide_versions v on v.id=qd.pt_kit_id
+inner join pt_mirror_product mp on mp.productid=qd.productid and mp.statecode=0
+ where quoteid=@session_id and pt_includedproduct=0  AND ( r.id is not NULL OR qd.new_adhoc =1)
+
+
+ -- Add the non product responses
+  insert into pt_guide_execution_responses (id ,guide_instance_id  ,base_question_id,question_id,response_id,response_value,response_string_value,response_int_value,response_float_value,response_date_value,response_comments
+           ,response_price,origin_by,origin_date,changed_by,change_date,parent_rule_id)
+select id ,guide_instance_id  ,base_question_id,question_id,response_id,response_value,response_string_value,response_int_value,response_float_value,response_date_value  ,response_comments
+           ,response_price,origin_by,origin_date,changed_by,change_date,parent_rule_id  
+		   from pt_pc_saved_guide_execution_responses with (nolock)
+		              where guide_instance_id in (select id from pt_guide_execution_instance with (nolock) where context_id=@session_id ) 
+					  and  response_id IN (select id from pt_guide_responses with (nolock) where product_dim_id is null)  -- query for survey questions without product dims
+
+  insert into pt_guide_execution_responses (id ,guide_instance_id  ,base_question_id,question_id,response_id,response_value,response_string_value,response_int_value,response_float_value,response_date_value,response_comments
+           ,response_price,origin_by,origin_date,changed_by,change_date,parent_rule_id)
+select id ,guide_instance_id  ,base_question_id,question_id,response_id,response_value,response_string_value,response_int_value,response_float_value,response_date_value  ,response_comments
+           ,response_price,origin_by,origin_date,changed_by,change_date,parent_rule_id  
+		   from pt_pc_saved_guide_execution_responses with (nolock)
+		              where guide_instance_id in (select id from pt_guide_execution_instance with (nolock) where context_id=@session_id ) 
+					  and  response_id IN 
+					  (SELECT r.id from pt_guide_responses r with (nolock) INNER JOIN 
+pt_prod_config_product_dim_header pd with (nolock) ON r.product_dim_id=pd.product_dim_id left join
+pt_mirror_product mp with (nolock) ON mp.productid=pd.product_id
+WHERE r.product_dim_id is not null and mp.productid is null )  -- query for survey questions with product dims
+
+
+
+-----------------------------included products------------------------
+
+ delete from pt_guide_execution_included_products where guide_instance_id in (select id from pt_guide_execution_instance where context_id=@session_id)
+
+  insert into pt_guide_execution_included_products 
+  (id,guide_instance_id,product_dim_id, quantity,price,comments,question_id,response_id,rule_id,price_list_id,origin_by,origin_date,changed_by,change_date)
+  select  quotedetailid,pt_configuration_id,ph.product_dim_id,case when isnull(new_option,0)=0 then Substring((cast (quantity as nvarchar)),0,CharIndex('.',(cast (quantity as nvarchar))))else new_optionquantity end as quantity,dbo.sh_fn_newpc_GetAccuratePrice(ph.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)as priceperunit,null,null,
+ (select id from pt_guide_responses  r inner join pt_prod_config_product_dim_header dh on r.product_dim_id=dh.product_dim_id
+and  r.question_id=(select top 1 pt_category_id from pt_mirror_quotedetail where quoteid=@session_id and productid=qd.pt_parentproductid) and dh.product_id=qd.pt_parentproductid) 
+  ,pt_includedproductid,dbo.sh_fn_getaccurate_price_listid(ph.product_dim_id,qd.pt_kit_id,qd.new_pricelistid)as price_list_id,@login_name,getdate(),@login_name,getdate()
+
+  from 
+  pt_mirror_quotedetail qd inner join 
+pt_prod_config_product_dim_header ph on qd.productid=ph.product_id  
+inner join pt_guide_rules gr ON gr.guide_id=qd.pt_kit_id and  gr.type='included' 
+ inner join pt_guide_rule_connections rc on rc.rule_id=gr.id and rc.object_id=ph.product_dim_id and rc.rule_id=qd.pt_includedproductid
+ inner join pt_mirror_product mp on mp.productid=qd.productid and mp.statecode=0
+where quoteid=@session_id and pt_includedproduct=1
+
+------------adding included products into extn table--------------------------------------
+
+delete from sh_guide_execution_included_products_extn where guide_instance_id in (select id from pt_guide_execution_instance where context_id=@session_id)
+
+insert into sh_guide_execution_included_products_extn
+        ( id,guide_instance_id,product_dim_id,quantity,price,comments ,question_id ,response_id ,rule_id ,price_list_id ,origin_by ,origin_date ,changed_by ,change_date ,new_percentdiscount ,         new_manualdiscount ,    manualdiscount ,       option_amount ,  option_manualdiscount_percent ,    option_manualdiscount ,      option_discount_subtotal ,option_extended_amount  ,option_priceperunit,isoption,option_qty)
+select  id,guide_instance_id,product_dim_id,i.quantity,i.price,i.comments,question_id,response_id,rule_id,price_list_id ,origin_by ,origin_date ,changed_by ,change_date ,qd.new_ManualDiscountPercent,qd.new_manualdiscount,qd.manualdiscountamount ,qd.new_optionamount,qd.new_optionmanualdiscountpercent ,qd.new_optionmanualdiscount,qd.new_optiondiscountsubtotal,qd.new_optionprice,qd.new_optionpriceperunit,qd.New_Option,qd.New_OptionQuantity from 
+
+pt_mirror_quotedetail qd with (nolock) inner join 
+
+pt_guide_execution_included_products i with (nolock) on qd.quotedetailid=i.id where qd.quoteid=@session_id
+
+
+
+
+--------------adding to pt_pc_cart_contents--------------
+ delete from pt_pc_cart_contents where session_id=@session_id
+
+insert into pt_pc_cart_contents 
+         (id, session_id, guide_instance_id, product_dim_id, quantity, price, discount_amount, discount_pct, price_list_id, origin_by, origin_date, changed_by, change_date)
+select  newid(), @session_id, t.instance_id, null,null,null,null,null,null, @login_name, getdate(), @login_name, getdate()
+	from  #ids t 
+
+	/*
+	insert into pt_pc_cart_contents 
+         (id, session_id, guide_instance_id, product_dim_id, quantity, price, discount_amount, discount_pct, price_list_id, origin_by, origin_date, changed_by, change_date)
+	select id, session_id, guide_instance_id, product_id, quantity, price, discount_amount, discount_pct, price_list_id, origin_by, origin_date, changed_by, change_date from pt_pc_saved_cart_contents where session_id=@session_id
+
+
+
+
+
+
+	delete from pt_pc_saved_cart_header where session_id=@session_id
+	delete from sh_pt_pc_cartcontents_extn_saved   where session_id=@session_id
+	delete from pt_pc_saved_guide_execution_instance where context_id=@session_id
+
+	delete from pt_pc_saved_guide_execution_responses where guide_instance_id in (select id from pt_guide_execution_instance with (nolock) where context_id=@session_id)
+    delete from pt_pc_saved_guide_execution_included_products where  guide_instance_id in (select id from pt_guide_execution_instance with (nolock) where context_id=@session_id ) 
+
+	delete from pt_pc_saved_cart_contents where session_id=@session_id
+
+
+
+
+	
+	
+
+--first update the changed values into saved tables
+
+ update  extn set 
+ extn.quantity=qd.quantity,
+ extn.kit_id_text=qd.new_kit_id_text,
+ extn.new_percentdiscount=qd.new_manualdiscountpercent,
+ extn.new_manualdiscount=qd.new_manualdiscount,
+ extn.manualdiscount=qd.manualdiscountamount,
+ extn.isoption=qd.new_option,
+ extn.option_qty=qd.new_optionquantity,
+  extn.option_priceperunit=qd.new_optionpriceperunit,
+ extn.option_amount=qd.new_optionamount,
+
+ extn.option_manualdiscount_percent=qd.new_optionmanualdiscountpercent,
+
+ extn.option_manualdiscount=qd.new_optionmanualdiscount,
+ extn.option_discount_subtotal=qd.new_optiondiscountsubtotal,
+ extn.option_extended_amount=qd.new_optionprice
+
+  from  pt_mirror_quotedetail qd inner join 
+ sh_pt_pc_cartcontents_extn_saved extn  on qd.quoteid=extn.session_id and qd.pt_category_id=extn.question_id where qd.quoteid=@session_id and qd.pt_includedproduct=0
+
+
+delete from sh_pt_pc_cartcontents_extn_saved   where session_id=@session_id  and  question_id not in (select pt_category_id from   pt_mirror_quotedetail where pt_includedproduct=0  and quoteid=@session_id)
+
+
+delete from pt_pc_cart_header where session_id=@session_id 
+
+insert into  pt_pc_cart_header (session_id,app_profile_id,name,description,revision_number,price_list_id,prepared_by_id,partner_id,quote_id,original_quote_id,opportunity_id,account_id,contact_id,origin_by,origin_date,changed_by,change_date)
+select session_id,app_profile_id,name,description,revision_number,price_list_id,prepared_by_id,partner_id,quote_id,original_quote_id,opportunity_id,account_id,contact_id,origin_by,GETDATE(),
+changed_by,GETDATE() 
+from pt_pc_saved_cart_header with (nolock)  where session_id=@session_id
+
+
+ 
+
+delete from pt_guide_execution_instance where context_id=@session_id
+
+insert into  pt_guide_execution_instance (id,guide_version_id,context_id,name,comments,owner_id,show_locked_sections,show_included_prod_notifications,display_mode,origin_by,origin_date,changed_by,change_date)
+select id,guide_version_id,context_id,name,comments,owner_id,show_locked_sections,show_included_prod_notifications,display_style,origin_by,GETDATE(),changed_by,GETDATE() 
+from pt_pc_saved_guide_execution_instance with (nolock) where context_id=@session_id
+
+
+
+
+
+delete from pt_guide_execution_responses where guide_instance_id in (select id from pt_pc_saved_guide_execution_instance where context_id=@session_id )
+delete from pt_pc_saved_guide_execution_responses where  guide_instance_id in (select id from pt_pc_saved_guide_execution_instance with (nolock) where context_id=@session_id )
+ and id not in (select quotedetailid from pt_mirror_quotedetail with (nolock) where quoteid=@session_id and pt_includedproduct=0)
+
+
+insert into pt_guide_execution_responses (id ,guide_instance_id  ,base_question_id,question_id,response_id,response_value,response_string_value,response_int_value,response_float_value,response_date_value,response_comments
+           ,response_price,origin_by,origin_date,changed_by,change_date,parent_rule_id)
+select id ,guide_instance_id  ,base_question_id,question_id,response_id,response_value,response_string_value,response_int_value,response_float_value,response_date_value  ,response_comments
+           ,response_price,origin_by,origin_date,changed_by,change_date,parent_rule_id  from pt_pc_saved_guide_execution_responses with (nolock)
+           where guide_instance_id in (select id from pt_pc_saved_guide_execution_instance with (nolock) where context_id=@session_id ) 
+
+
+----this delete of included products should be here only for the sake of line item number in extn table
+
+delete from pt_guide_execution_included_products where guide_instance_id in (select id from pt_guide_execution_instance with (nolock) where context_id=@session_id )
+
+
+delete from pt_pc_saved_guide_execution_included_products where  guide_instance_id in (select id from pt_pc_saved_guide_execution_instance with (nolock) where context_id=@session_id ) 
+and id not in (select quotedetailid from pt_mirror_quotedetail with (nolock) where quoteid=@session_id and pt_includedproduct=1)
+
+
+insert into pt_guide_execution_included_products
+select * from pt_pc_saved_guide_execution_included_products with (nolock) where guide_instance_id in (select id from pt_guide_execution_instance with (nolock) where context_id=@session_id )
+
+
+delete from pt_pc_cart_contents where session_id=@session_id
+
+insert into pt_pc_cart_contents
+select * from pt_pc_saved_cart_contents with (nolock) where session_id=@session_id
+
+
+
+
+delete from sh_pt_pc_cartcontents_extn  where session_id=@session_id
+
+insert into sh_pt_pc_cartcontents_extn 
+select * from sh_pt_pc_cartcontents_extn_saved with (nolock) where session_id=@session_id
+
+
+*/
+
+--product_dim_id should be added,writeinproductname,,question_id,response_id,
+
+select @@ROWCOUNT as row_count
+
+
+
+end
+
+
